@@ -30,6 +30,7 @@ import { createCharacter } from './character.js';
 import { createCameraRig } from './camera.js';
 import { createCombat } from './combat.js';
 import { createPolice } from './police.js';
+import { createOfficers } from './officers.js';
 import { MISSIONS, createMissions } from './missions.js';
 import { createHud } from './hud.js';
 import { createMenu } from './menu.js';
@@ -151,6 +152,7 @@ async function boot({ sceneCanvas, hudCanvas }) {
   const rig = createCameraRig(camera);
   const combat = createCombat(scene, player, collision);
   const police = createPolice(vehicles, player, scene);
+  const officers = createOfficers(scene, city, police, vehicles);
   const missions = createMissions(scene, city, player);
 
   // ------------------------------------------------------------ HUD/menu/input/audio
@@ -208,6 +210,7 @@ async function boot({ sceneCanvas, hudCanvas }) {
     rig,
     combat,
     police,
+    officers,
     missions,
     hud,
     audio,
@@ -682,6 +685,7 @@ async function boot({ sceneCanvas, hudCanvas }) {
             rig.shake(0.35);
           },
         });
+        officers.update(dt, { playerPos: ps.position });
         missions.update(dt, {
           kills: killsThisFrame,
           position: ps.position,

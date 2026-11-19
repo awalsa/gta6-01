@@ -472,6 +472,16 @@ export function stageShot(nameOrGame, gameOrName) {
   // Driving shots get ambient traffic; chase shots get the pursuit on top of it.
   if (entry.inVehicle) stageTraffic(game, px, pz, yaw);
   if (flavour.heat !== undefined) stagePursuit(game, px, pz, yaw, flavour);
+  // Chase frames get the officers on foot as well: two at three stars,
+  // three at four, standing ahead of her and facing her — which also
+  // faces the lens. A frame without heat has no wanted level, so no
+  // officers: a beat cop wandering a quiet mission frame would read wrong.
+  if (flavour.heat !== undefined) {
+    const officers = game && game.officers;
+    if (officers && typeof officers.stage === 'function') {
+      callIf(officers, 'stage', { x: px, z: pz, yaw }, { count: flavour.stars >= 4 ? 3 : 2 });
+    }
+  }
 
   // ------------------------------------------------------------ the lens, last
   // Last, because the safety loop needs to know where the population ended up: a lens pushed
