@@ -21,6 +21,21 @@ export const SKINS = [
   0xf7d7b0,
 ];
 
+/** Dark jackets, after the reference looks: black, navy, green bomber. */
+export const JACKETS = [
+  0x1b1b20, 0x2f4d70, 0x5a6b3f, 0x3a2f2f, 0x23282e, 0x4a3b52,
+];
+
+/** One bright accent panel per jacket: orange, teal, red, white, yellow. */
+export const ACCENTS = [
+  0xe86a1c, 0x1f9aa8, 0xc8102e, 0xe8e8e8, 0xe8c33f, 0x2fb3a6,
+];
+
+/** Mostly black caps, a few dark variants. */
+export const CAPS = [
+  0x141416, 0x1e1e24, 0x2b2b30, 0x3a2f2f, 0x1f2a3a,
+];
+
 const COUNT = 38;
 const WALK_SPEED = 1.35;
 const RUN_SPEED = 5.4;
@@ -114,24 +129,42 @@ function roadPoint(handles, rng, cx, cz) {
 
 function buildFigure(rng) {
   const group = new THREE.Group();
-  const shirt = choose(rng, SHIRTS);
   const pants = choose(rng, TROUSERS);
   const skin = choose(rng, SKINS);
   const hairShade = choose(rng, [0x1c1a18, 0x3b2a1a, 0x6b6b6b, 0x8a5a2b, 0x111111, 0xd8c690]);
+  // A little under half the crowd is female: slimmer, a touch shorter, long
+  // hair down the back. The rest read male. Most peds wear a dark jacket
+  // with one bright accent panel and a black cap, after the reference looks.
+  const female = rng() < 0.45;
+  const jacket = choose(rng, JACKETS);
+  const accent = choose(rng, ACCENTS);
+  const capShade = choose(rng, CAPS);
+  const hasCap = rng() < 0.65;
+  const hasAccent = rng() < 0.55;
 
-  const shirtMat = new THREE.MeshLambertMaterial({ color: shirt });
   const pantsMat = new THREE.MeshLambertMaterial({ color: pants });
   const skinMat = new THREE.MeshLambertMaterial({ color: skin });
   const hairMat = new THREE.MeshLambertMaterial({ color: hairShade });
+  const jacketMat = new THREE.MeshLambertMaterial({ color: jacket });
+  const accentMat = new THREE.MeshLambertMaterial({ color: accent });
+  const capMat = new THREE.MeshLambertMaterial({ color: capShade });
 
-  const height = roll(rng, 1.62, 1.92);
-  const bulk = roll(rng, 0.86, 1.18);
+  const height = female ? roll(rng, 1.58, 1.78) : roll(rng, 1.68, 1.92);
+  const bulk = female ? roll(rng, 0.8, 1.0) : roll(rng, 0.86, 1.18);
   const scale = height / 1.78;
 
-  const torso = new THREE.Mesh(new THREE.BoxGeometry(0.46 * bulk, 0.58, 0.26 * bulk), shirtMat);
+  const torsoW = (female ? 0.4 : 0.46) * bulk;
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(torsoW, female ? 0.54 : 0.58, 0.26 * bulk), jacketMat);
   torso.position.y = 1.02;
   torso.castShadow = true;
   group.add(torso);
+
+  // One bright accent panel on the jacket chest.
+  if (hasAccent) {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.46, 0.02), accentMat);
+    panel.position.set(female ? 0.09 : 0.11, 1.03, 0.13 * bulk + 0.015);
+    group.add(panel);
+  }
 
   const head = new THREE.Mesh(new THREE.SphereGeometry(0.15, 12, 10), skinMat);
   head.position.y = 1.5;
@@ -142,40 +175,61 @@ function buildFigure(rng) {
   hair.position.y = 1.53;
   group.add(hair);
 
-  const legGeo = new THREE.BoxGeometry(0.15, 0.62, 0.17);
+  // Black cap: crown over the hair, brim forward. Women keep long hair down
+  // the back under it.
+  if (hasCap) {
+    const crown = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.11, 0.3), capMat);
+    crown.position.y = 1.62;
+    crown.castShadow = true;
+    group.add(crown);
+
+    const brim = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.03, 0.16), capMat);
+    brim.position.set(0, 1.585, 0.17);
+    group.add(brim);
+  }
+
+  if (female) {
+    const longHair = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.36, 0.08), hairMat);
+    longHair.position.set(0, 1.32, -0.13);
+    group.add(longHair);
+  }
+
+  const legW = female ? 0.13 : 0.15;
+  const legGeo = new THREE.BoxGeometry(legW, 0.62, 0.17);
   const leftLeg = new THREE.Mesh(legGeo, pantsMat);
   leftLeg.geometry = legGeo.clone();
   leftLeg.geometry.translate(0, -0.31, 0);
-  leftLeg.position.set(-0.12, 0.72, 0);
+  leftLeg.position.set(female ? -0.1 : -0.12, 0.72, 0);
   leftLeg.castShadow = true;
   group.add(leftLeg);
 
   const rightLeg = new THREE.Mesh(legGeo, pantsMat);
   rightLeg.geometry = legGeo.clone();
   rightLeg.geometry.translate(0, -0.31, 0);
-  rightLeg.position.set(0.12, 0.72, 0);
+  rightLeg.position.set(female ? 0.1 : 0.12, 0.72, 0);
   rightLeg.castShadow = true;
   group.add(rightLeg);
 
-  const armGeo = new THREE.BoxGeometry(0.11, 0.52, 0.13);
-  const leftArm = new THREE.Mesh(armGeo, shirtMat);
+  const armGeo = new THREE.BoxGeometry(female ? 0.1 : 0.11, 0.52, 0.13);
+  const armX = (female ? 0.27 : 0.3) * bulk;
+  const leftArm = new THREE.Mesh(armGeo, jacketMat);
   leftArm.geometry = armGeo.clone();
   leftArm.geometry.translate(0, -0.26, 0);
-  leftArm.position.set(-0.3 * bulk, 1.26, 0);
+  leftArm.position.set(-armX, 1.26, 0);
   group.add(leftArm);
 
-  const rightArm = new THREE.Mesh(armGeo, skinMat);
+  const rightArm = new THREE.Mesh(armGeo, jacketMat);
   rightArm.geometry = armGeo.clone();
   rightArm.geometry.translate(0, -0.26, 0);
-  rightArm.position.set(0.3 * bulk, 1.26, 0);
+  rightArm.position.set(armX, 1.26, 0);
   group.add(rightArm);
 
   const handGeo = new THREE.SphereGeometry(0.06, 8, 6);
   const leftHand = new THREE.Mesh(handGeo, skinMat);
-  leftHand.position.set(-0.3 * bulk, 0.72, 0);
+  leftHand.position.set(-armX, 0.72, 0);
   group.add(leftHand);
   const rightHand = new THREE.Mesh(handGeo, skinMat);
-  rightHand.position.set(0.3 * bulk, 0.72, 0);
+  rightHand.position.set(armX, 0.72, 0);
   group.add(rightHand);
 
   group.scale.setScalar(scale);

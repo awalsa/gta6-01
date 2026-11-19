@@ -119,7 +119,7 @@ export const CAR_SPECS = {
   taxi: { length: 4.6, width: 1.92, height: 1.5, power: 8.0, top: 24, mass: 1.05, paint: 0xe0b93a },
   van: { length: 5.3, width: 2.12, height: 2.1, power: 7.0, top: 22, mass: 1.5, paint: 0xd8d5cc },
   pickup: { length: 5.0, width: 2.0, height: 1.72, power: 7.8, top: 24, mass: 1.3, paint: 0x3f6d5a },
-  sports: { length: 4.3, width: 1.98, height: 1.16, power: 12.5, top: 34, mass: 0.85, paint: 0xd9a2b4 },
+  sports: { length: 4.3, width: 1.98, height: 1.16, power: 12.5, top: 34, mass: 0.85, paint: 0x1c1c22 },
   cruiser: { length: 4.8, width: 1.96, height: 1.52, power: 10.5, top: 30, mass: 1.15, paint: 0x141c26 },
   boat: { length: 6.4, width: 2.3, height: 1.3, power: 9.0, top: 20, mass: 1.8, paint: 0xf0e6d2 },
 };

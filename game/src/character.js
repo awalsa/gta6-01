@@ -1,19 +1,25 @@
-// Dani Reyes, rendered. player.js owns where she is; this module owns what she
-// looks like — a bike courier in a denim jacket, built from boxes, with every
-// limb hanging off a pivot at its joint so a walk cycle swings from the shoulder
+// Dani Reyes, rendered. player.js owns where he is; this module owns what he
+// looks like — a bike courier in a black cap and a black jacket with orange
+// and teal accents, gold chain at his neck, built from boxes, with every limb
+// hanging off a pivot at its joint so a walk cycle swings from the shoulder
 // and hip instead of around the middle of a limb.
 
 import * as THREE from 'three';
 import { clamp, damp, lerp } from './mathutil.js';
 
-// Palette: warm skin against mid-blue denim and near-black trousers, chosen so
-// she separates from an orange, low-contrast sunset street.
+// Palette: warm skin against near-black jacket and trousers, orange and teal
+// accents and a gold chain, chosen so he separates from an orange,
+// low-contrast sunset street.
 const PALETTE = {
   skin: 0xc98d63,
   skinDark: 0xb47a52,
-  jacket: 0x2f4d70,
-  jacketDark: 0x243c58,
-  tee: 0x8f9aa4,
+  jacket: 0x1b1b20,
+  jacketDark: 0x141419,
+  jacketOrange: 0xe86a1c,
+  jacketTeal: 0x1f9aa8,
+  cap: 0x141416,
+  chain: 0xd8a83c,
+  tee: 0x1e1e22,
   pants: 0x23262f,
   hair: 0x241a14,
   shoe: 0x17171a,
@@ -81,23 +87,47 @@ export function createCharacter(scene, player) {
   neck.position.y = DIM.torsoH + 0.03;
   hips.add(neck);
 
+  // Orange and teal accent panels on the jacket chest, tilted slightly so
+  // they read as diagonal cuts rather than stripes.
+  const accentL = slab(0.09, 0.5, 0.02, PALETTE.jacketOrange, 0.85);
+  accentL.position.set(-0.15, DIM.torsoH * 0.48, 0.155);
+  accentL.rotation.z = 0.12;
+  hips.add(accentL);
+
+  const accentR = slab(0.09, 0.5, 0.02, PALETTE.jacketTeal, 0.85);
+  accentR.position.set(0.15, DIM.torsoH * 0.48, 0.155);
+  accentR.rotation.z = -0.12;
+  hips.add(accentR);
+
+  // Gold chain across the neck front, star pendant hanging on the chest.
+  const chain = slab(0.2, 0.02, 0.02, PALETTE.chain, 0.5);
+  chain.position.set(0, DIM.torsoH + 0.02, 0.08);
+  hips.add(chain);
+
+  const pendant = slab(0.05, 0.06, 0.02, PALETTE.chain, 0.5);
+  pendant.position.set(0, DIM.torsoH - 0.08, 0.165);
+  hips.add(pendant);
+
   // --- head ----------------------------------------------------------------
   const skull = joint(hips, 0, DIM.torsoH, 0);
   const face = slab(0.26, 0.28, 0.26, PALETTE.skin, 0.7);
   face.position.y = 0.14;
   skull.add(face);
 
-  // Hair cap sits proud and slightly back so the face stays readable from a
-  // camera that is usually behind her.
-  const hairCap = slab(0.28, 0.16, 0.29, PALETTE.hair, 0.95);
-  hairCap.position.set(0, 0.245, -0.015);
-  skull.add(hairCap);
+  // Black cap: crown proud of the skull, brim forward — the silhouette
+  // detail that survives being eight pixels tall in a chase camera. A short
+  // dark fringe shows under it at the back of the head.
+  const capCrown = slab(0.28, 0.12, 0.28, PALETTE.cap, 0.9);
+  capCrown.position.set(0, 0.26, -0.01);
+  skull.add(capCrown);
 
-  // Ponytail: the one silhouette detail that survives being eight pixels tall
-  // in a chase camera.
-  const pony = slab(0.13, 0.2, 0.12, PALETTE.hair, 0.95);
-  pony.position.set(0, 0.13, -0.17);
-  skull.add(pony);
+  const capBrim = slab(0.26, 0.03, 0.16, PALETTE.cap, 0.9);
+  capBrim.position.set(0, 0.215, 0.17);
+  skull.add(capBrim);
+
+  const backHair = slab(0.24, 0.1, 0.06, PALETTE.hair, 0.95);
+  backHair.position.set(0, 0.16, -0.14);
+  skull.add(backHair);
 
   // --- limbs ---------------------------------------------------------------
   function makeArm(side) {
@@ -111,6 +141,11 @@ export function createCharacter(scene, player) {
     const fore = slab(0.11, DIM.forearm, 0.12, PALETTE.jacketDark);
     fore.position.y = -DIM.forearm * 0.5;
     elbow.add(fore);
+
+    // Orange cuff at the wrist end of the sleeve.
+    const cuff = slab(0.12, 0.05, 0.13, PALETTE.jacketOrange, 0.85);
+    cuff.position.y = -DIM.forearm + 0.025;
+    elbow.add(cuff);
 
     const hand = slab(0.1, 0.12, 0.11, PALETTE.skin, 0.75);
     hand.position.y = -(DIM.forearm + 0.06);
@@ -129,7 +164,7 @@ export function createCharacter(scene, player) {
     shin.position.y = -DIM.shin * 0.5;
     knee.add(shin);
 
-    // Toe toward local +Z (her facing direction) so it reads from behind.
+    // Toe toward local +Z (his facing direction) so it reads from behind.
     const shoe = slab(0.17, DIM.shoeH, 0.28, PALETTE.shoe, 0.6);
     shoe.position.set(0, -DIM.shin - DIM.shoeH * 0.4, 0.05);
     knee.add(shoe);
