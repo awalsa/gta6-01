@@ -1,260 +1,197 @@
-// The shoreline east of the city: boardwalk, seawall, sand and open water.
-//
-// Bands sit below y = 0 on purpose (WORLD.beachDrop is -1.35): the city's asphalt plane lies
-// exactly at y = 0, and anything authored at that height shimmers against it at grazing
-// angles. Only the boardwalk keeps promenade height, with a small lip so it never sits
-// coplanar on a slab.
-
 import * as THREE from 'three';
 import { COLORS, WORLD } from './config.js';
 import { clamp, smoothstep } from './mathutil.js';
 import { boardwalkTexture, sandTexture } from './textures.js';
 
-// WORLD.extent is a radius, not a width: the shore runs the full -extent..+extent span.
-const EDGE = WORLD.extent;
-const SPAN = EDGE * 2;
-
-const SAND_X0 = WORLD.beachStart; // 86: inland edge, buried under the seawall
-const SAND_X1 = WORLD.beachEnd; // 128: where the surf takes over
-const SAND_W = SAND_X1 - SAND_X0;
-const SAND_Y = WORLD.beachDrop; // -1.35: one step down from the promenade
-
-const DECK_W = 7;
-const DECK_LIP = 0.035;
-const DECK_TOP = WORLD.kerb + DECK_LIP;
-
-const WALL_T = 1.4;
-const WALL_TOP = WORLD.kerb;
-const WALL_BOTTOM = SAND_Y - 0.1; // sunk into the sand so the wall base never z-fights it
-
-// Sea plane sits 27 cm under the sand: the summed wave crest peaks at about +0.19, so the surf
-// can never poke through the beach, and the water can run inland underneath the sand with no seam.
-const WATER_Y = SAND_Y - 0.27;
-const SEA_X0 = 96;
-
-// Reused each frame by the fog sync below; kept out here so update() allocates nothing.
-const warmSun = new THREE.Color(0xffe0b0);
-
-// Clone a cached canvas texture so this module's repeat stays independent of other users.
-function repeatTex(texture, rx, ry) {
-  const t = texture.clone();
-  t.needsUpdate = true;
-  t.wrapS = THREE.RepeatWrapping;
-  t.wrapT = THREE.RepeatWrapping;
-  t.repeat.set(rx, ry);
-  return t;
-}
-
-const WATER_VERT = /* glsl */ `
-  uniform float uTime;
-
-  varying vec3 vWorld;
-  varying float vWave;
-
-  void main() {
-    vec3 p = position;
-
-    // Two overlapping swells at different wavelengths and drift speeds. One sine alone lines
-    // its crests into a visible grid, which reads as a pool, not the sea.
-    float w1 = sin(p.x * 0.19 + uTime * 0.9) * 0.11;
-    float w2 = sin(p.z * 0.07 - uTime * 1.2 + p.x * 0.05) * 0.08;
-
-    p.y += w1 + w2;
-    vWave = w1 + w2;
-
-    vec4 world = modelMatrix * vec4(p, 1.0);
-    vWorld = world.xyz;
-
-    gl_Position = projectionMatrix * viewMatrix * world;
-  }
-`;
-
-const WATER_FRAG = /* glsl */ `
-  uniform float uTime;
-  uniform vec3 uDeep;
-  uniform vec3 uShallow;
-  uniform vec3 uSunColor;
-  uniform vec3 uFogColor;
-  uniform float uFogNear;
-  uniform float uFogFar;
-  uniform float uLight;
-
-  varying vec3 vWorld;
-  varying float vWave;
-
-  void main() {
-    // Wave height picks the colour: troughs deep teal, crests pale and sky-lit.
-    float crest = smoothstep(-0.15, 0.17, vWave);
-    vec3 col = mix(uDeep, uShallow, crest);
-
-    // The sea is lit by the sky, not by itself: at night the graded light collapses toward
-    // black instead of leaving a glowing teal sheet in a dark world.
-    col = mix(uFogColor * 0.18, col, uLight);
-
-    // Fine detail fades with distance: at 300 m each ripple is a couple of pixels and aliases
-    // into moire, while the far water is fog-washed anyway.
-    float dist = length(cameraPosition - vWorld);
-    float detail = 1.0 - smoothstep(90.0, 320.0, dist);
-
-    // A broad sun streak sliding with the surface, plus a tighter sparkle term.
-    float band = sin(vWorld.x * 0.5 - uTime * 1.5 + vWorld.z * 0.09 + vWave * 6.0);
-    float streak = pow(max(band, 0.0), 6.0);
-    float sparkle = pow(max(sin(vWorld.z * 0.85 + uTime * 2.2), 0.0), 24.0);
-
-    // Grazing view angles catch far more sun, and mirror the sky more than the depth colour.
-    vec3 viewDir = normalize(cameraPosition - vWorld);
-    float grazing = pow(1.0 - clamp(viewDir.y, 0.0, 1.0), 2.5);
-    col = mix(col, uFogColor * (0.35 + 0.65 * uLight), grazing * 0.55);
-
-    col += uSunColor * (streak * (0.22 + 0.9 * grazing) + sparkle * 0.22) * detail * uLight;
-
-    // Linear fog matching the rest of the scene, so the sea dissolves into the horizon instead
-    // of ending in a hard teal edge.
-    float fogFactor = smoothstep(uFogNear, uFogFar, dist);
-    col = mix(col, uFogColor, fogFactor);
-
-    gl_FragColor = vec4(col, 0.92);
-
-    #include <tonemapping_fragment>
-    #include <colorspace_fragment>
-  }
-`;
-
 export function createBeach(scene) {
-  const group = new THREE.Group();
-  group.name = 'beach';
+  const spanZ = WORLD.extent * 2;
+  const beachWidth = WORLD.beachEnd - WORLD.beachStart;
+  const beachCentreX = (WORLD.beachStart + WORLD.beachEnd) * 0.5;
 
-  const sandCentreX = (SAND_X0 + SAND_X1) / 2;
+  // --- Sand: a wide strip sloping gently down toward the sea ---
+  const sandTex = sandTexture();
+  sandTex.wrapS = THREE.RepeatWrapping;
+  sandTex.wrapT = THREE.RepeatWrapping;
+  sandTex.repeat.set(6, 24);
 
-  // --- sand ---------------------------------------------------------------
-  const sandMap = repeatTex(sandTexture(), SAND_W / 4, SPAN / 4);
-  sandMap.anisotropy = 8;
-  sandMap.colorSpace = THREE.SRGBColorSpace;
-
-  const sandGeo = new THREE.PlaneGeometry(SAND_W, SPAN, 48, 1);
+  const sandGeo = new THREE.PlaneGeometry(beachWidth, spanZ, 40, 24);
   sandGeo.rotateX(-Math.PI / 2);
-  {
-    const pos = sandGeo.attributes.position;
-    const shades = new Float32Array(pos.count * 3);
-    for (let i = 0; i < pos.count; i++) {
-      const worldX = pos.getX(i) + sandCentreX;
-      // Past x = 118 the sand rolls down under the surf: the sea plane starts inland at x = 96,
-      // so the two surfaces have to cross or the waterline is a visible geometry edge.
-      pos.setY(i, SAND_Y - smoothstep(SAND_X1 - 10, SAND_X1, worldX) * 0.95);
-
-      // Wet band: sand darkens and cools over the last metres before the surf. Baked into
-      // vertex colour — a decal strip along the waterline would read as painted on.
-      const wet = smoothstep(SAND_X1 - 14, SAND_X1 - 3, worldX);
-      const v = 1 - wet * 0.34;
-      shades[i * 3] = v;
-      shades[i * 3 + 1] = v * (1 - wet * 0.02);
-      shades[i * 3 + 2] = v * (1 + wet * 0.04);
-    }
-    pos.needsUpdate = true;
-    sandGeo.setAttribute('color', new THREE.BufferAttribute(shades, 3));
-    sandGeo.computeVertexNormals();
+  const pos = sandGeo.attributes.position;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i);
+    const z = pos.getZ(i);
+    // 0 at the boardwalk edge, 1 at the waterline.
+    const t = clamp((x + beachWidth / 2) / beachWidth, 0, 1);
+    const drop = smoothstep(0, 1, t) * WORLD.beachDrop;
+    const dune = Math.sin(x * 0.35 + z * 0.08) * 0.12 * (1 - t)
+      + Math.sin(z * 0.22) * 0.08 * t;
+    pos.setY(i, WORLD.groundY - drop + dune);
   }
+  sandGeo.computeVertexNormals();
 
-  const sand = new THREE.Mesh(
-    sandGeo,
-    new THREE.MeshStandardMaterial({ map: sandMap, roughness: 0.97, metalness: 0, vertexColors: true })
-  );
-  sand.position.set(sandCentreX, 0, 0);
+  const sandMat = new THREE.MeshStandardMaterial({
+    map: sandTex,
+    color: COLORS.sand,
+    roughness: 1,
+    metalness: 0,
+  });
+  const sand = new THREE.Mesh(sandGeo, sandMat);
+  sand.position.set(beachCentreX, 0, 0);
   sand.receiveShadow = true;
-  group.add(sand);
+  scene.add(sand);
 
-  // --- boardwalk along the inland edge, at promenade height ---------------
-  const deckMap = repeatTex(boardwalkTexture(), 3, 70);
-  deckMap.anisotropy = 8;
-  const boardwalk = new THREE.Mesh(
-    new THREE.BoxGeometry(DECK_W, 0.18, SPAN),
-    new THREE.MeshStandardMaterial({ map: deckMap, roughness: 0.86, metalness: 0 })
-  );
-  boardwalk.position.set(SAND_X0 - DECK_W / 2, DECK_TOP - 0.09, 0);
-  boardwalk.receiveShadow = true;
-  group.add(boardwalk);
+  // --- Ocean: a broad sheet east of the sand, slightly below its edge ---
+  const seaWidth = WORLD.extent * 1.2;
+  const seaGeo = new THREE.PlaneGeometry(seaWidth, spanZ, 32, 16);
+  seaGeo.rotateX(-Math.PI / 2);
+  const seaMat = new THREE.MeshStandardMaterial({
+    color: COLORS.water,
+    roughness: 0.25,
+    metalness: 0.05,
+    transparent: true,
+    opacity: 0.88,
+  });
+  const sea = new THREE.Mesh(seaGeo, seaMat);
+  const seaBaseY = WORLD.groundY - WORLD.beachDrop - 0.25;
+  sea.position.set(WORLD.beachEnd + seaWidth / 2 - 1, seaBaseY, 0);
+  sea.receiveShadow = true;
+  scene.add(sea);
 
-  // --- seawall, holding the promenade up where the sand drops away --------
-  const wallH = WALL_TOP - WALL_BOTTOM;
-  const seawall = new THREE.Mesh(
-    new THREE.BoxGeometry(WALL_T, wallH, SPAN),
-    new THREE.MeshStandardMaterial({ color: COLORS.concrete, roughness: 0.93, metalness: 0 })
-  );
-  seawall.position.set(SAND_X0, WALL_BOTTOM + wallH / 2, 0);
-  seawall.castShadow = true;
-  seawall.receiveShadow = true;
-  group.add(seawall);
+  // --- Foam: a pale ribbon riding the waterline, sliding with the swell ---
+  const foamGeo = new THREE.PlaneGeometry(1.6, spanZ, 1, 24);
+  foamGeo.rotateX(-Math.PI / 2);
+  const foamMat = new THREE.MeshStandardMaterial({
+    color: 0xf4fbff,
+    roughness: 0.6,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.55,
+  });
+  const foam = new THREE.Mesh(foamGeo, foamMat);
+  foam.position.set(WORLD.beachEnd - 0.4, seaBaseY + 0.12, 0);
+  foam.receiveShadow = true;
+  scene.add(foam);
 
-  // --- the sea ------------------------------------------------------------
-  const seaW = EDGE - SEA_X0;
-  const waterGeo = new THREE.PlaneGeometry(seaW, SPAN, 96, 64);
-  waterGeo.rotateX(-Math.PI / 2);
+  // --- Boardwalk: raised timber deck along the western edge of the sand ---
+  const deckTex = boardwalkTexture();
+  deckTex.wrapS = THREE.RepeatWrapping;
+  deckTex.wrapT = THREE.RepeatWrapping;
+  deckTex.repeat.set(2, 40);
 
-  const waterUniforms = {
-    uTime: { value: 0 },
-    uDeep: { value: new THREE.Color(0x155a6b) },
-    uShallow: { value: new THREE.Color(0x4fb6b4) },
-    uSunColor: { value: new THREE.Color(COLORS.sun) },
-    uFogColor: { value: new THREE.Color(0xffffff) },
-    uFogNear: { value: 90 },
-    uFogFar: { value: 520 },
-    uLight: { value: 1 },
-  };
+  const deckWidth = 5;
+  const deckGeo = new THREE.BoxGeometry(deckWidth, 0.35, spanZ);
+  const deckMat = new THREE.MeshStandardMaterial({
+    map: deckTex,
+    roughness: 0.9,
+    metalness: 0,
+  });
+  const deck = new THREE.Mesh(deckGeo, deckMat);
+  deck.position.set(WORLD.beachStart - deckWidth / 2 + 1, WORLD.groundY + 0.45, 0);
+  deck.castShadow = true;
+  deck.receiveShadow = true;
+  scene.add(deck);
 
-  const water = new THREE.Mesh(
-    waterGeo,
-    new THREE.ShaderMaterial({
-      uniforms: waterUniforms,
-      vertexShader: WATER_VERT,
-      fragmentShader: WATER_FRAG,
-      transparent: true,
-      depthWrite: false,
-      side: THREE.FrontSide,
-    })
-  );
-  water.position.set(SEA_X0 + seaW / 2, WATER_Y, 0);
-  water.renderOrder = 1; // drawn after the opaque sand it sits on, so depth shows through
-  group.add(water);
-
-  scene.add(group);
-
-  // Pull fog from the scene every frame — sky.js repaints it, so read it, never cache it.
-  function syncFog() {
-    const fog = scene.fog;
-    if (!fog) return;
-    waterUniforms.uFogColor.value.copy(fog.color);
-    if (fog.isFog) {
-      waterUniforms.uFogNear.value = fog.near;
-      waterUniforms.uFogFar.value = fog.far;
-    } else if (fog.isFogExp2) {
-      // Exp2 has no near/far; use the 2% visibility distance as the far edge.
-      waterUniforms.uFogNear.value = 0;
-      waterUniforms.uFogFar.value = Math.sqrt(-Math.log(0.02)) / Math.max(1e-4, fog.density);
+  // Support posts under the deck, spaced along its length.
+  const postGeo = new THREE.CylinderGeometry(0.14, 0.14, 0.9, 8);
+  const postMat = new THREE.MeshStandardMaterial({
+    color: COLORS.concrete,
+    roughness: 0.95,
+    metalness: 0,
+  });
+  const postCount = 24;
+  const posts = new THREE.InstancedMesh(postGeo, postMat, postCount * 2);
+  const dummy = new THREE.Object3D();
+  let idx = 0;
+  for (let i = 0; i < postCount; i++) {
+    const z = -WORLD.extent + (i + 0.5) * (spanZ / postCount);
+    for (const dx of [-deckWidth / 2 + 0.5, deckWidth / 2 - 0.5]) {
+      dummy.position.set(deck.position.x + dx, WORLD.groundY - 0.05, z);
+      dummy.updateMatrix();
+      posts.setMatrixAt(idx++, dummy.matrix);
     }
+  }
+  posts.castShadow = true;
+  scene.add(posts);
 
-    // The sea must be fully fogged by the time its geometry ends at EDGE, or the plane's own
-    // far edge becomes a hard teal line standing in for the horizon.
-    waterUniforms.uFogFar.value = Math.min(waterUniforms.uFogFar.value, EDGE - 12);
-    waterUniforms.uFogNear.value = Math.min(waterUniforms.uFogNear.value, waterUniforms.uFogFar.value * 0.5);
+  // Low rail on the seaward side of the deck.
+  const railGeo = new THREE.BoxGeometry(0.12, 0.12, spanZ);
+  const railMat = new THREE.MeshStandardMaterial({
+    color: COLORS.concrete,
+    roughness: 0.85,
+    metalness: 0,
+  });
+  const rail = new THREE.Mesh(railGeo, railMat);
+  rail.position.set(
+    deck.position.x + deckWidth / 2 - 0.3,
+    WORLD.groundY + 1.35,
+    0,
+  );
+  rail.castShadow = true;
+  scene.add(rail);
 
-    // The sun tint follows the graded sky, or the glint stays noon-white while everything else
-    // goes orange at dusk.
-    waterUniforms.uSunColor.value.copy(fog.color).lerp(warmSun, 0.55);
+  const railPostGeo = new THREE.CylinderGeometry(0.07, 0.07, 0.9, 6);
+  const railPosts = new THREE.InstancedMesh(railPostGeo, railMat, postCount);
+  for (let i = 0; i < postCount; i++) {
+    const z = -WORLD.extent + (i + 0.5) * (spanZ / postCount);
+    dummy.position.set(rail.position.x, WORLD.groundY + 0.9, z);
+    dummy.updateMatrix();
+    railPosts.setMatrixAt(i, dummy.matrix);
+  }
+  scene.add(railPosts);
 
-    // Fog luminance is the beach's only reliable proxy for "how lit is the world right now":
-    // bright noon fog reads as 1, deep midnight blue as 0.
-    const lum = 0.2126 * fog.color.r + 0.7152 * fog.color.g + 0.0722 * fog.color.b;
-    waterUniforms.uLight.value = clamp((lum - 0.004) / 0.22, 0, 1);
+  // A few simple sun umbrellas dotted on the dry sand for scale.
+  const umbrellaGroup = new THREE.Group();
+  const canopyGeo = new THREE.ConeGeometry(1.6, 0.7, 8);
+  const poleGeo = new THREE.CylinderGeometry(0.05, 0.05, 2.2, 6);
+  const canopyColours = [0xe4572e, 0x2e86de, 0xf5c542];
+  for (let i = 0; i < 3; i++) {
+    const pole = new THREE.Mesh(
+      poleGeo,
+      new THREE.MeshStandardMaterial({ color: 0xdddddd, roughness: 0.5 }),
+    );
+    const canopy = new THREE.Mesh(
+      canopyGeo,
+      new THREE.MeshStandardMaterial({
+        color: canopyColours[i % canopyColours.length],
+        roughness: 0.8,
+      }),
+    );
+    canopy.position.y = 2.3;
+    canopy.castShadow = true;
+    const spot = new THREE.Group();
+    spot.add(pole);
+    spot.add(canopy);
+    spot.position.set(
+      WORLD.beachStart + 4 + i * 5,
+      WORLD.groundY - WORLD.beachDrop * 0.25,
+      -18 + i * 16,
+    );
+    umbrellaGroup.add(spot);
+  }
+  scene.add(umbrellaGroup);
+
+  let elapsed = 0;
+
+  function update(dt) {
+    elapsed += dt;
+    const safeDt = clamp(dt, 0, 0.1);
+
+    // Gentle swell: the sea breathes up and down, the foam rides with it.
+    const swell = Math.sin(elapsed * 0.8) * 0.09
+      + Math.sin(elapsed * 0.53 + 1.3) * 0.05;
+    sea.position.y = seaBaseY + swell;
+    foam.position.y = seaBaseY + 0.12 + swell * 1.4;
+    foam.position.x = WORLD.beachEnd - 0.4
+      + Math.sin(elapsed * 0.6) * 0.5;
+
+    // Slow ripple across the water surface via a subtle tilt.
+    sea.rotation.z = Math.sin(elapsed * 0.45) * 0.004;
+
+    // Foam fades in and out as each wave arrives and retreats.
+    foamMat.opacity = 0.4 + 0.25 * smoothstep(-1, 1, Math.sin(elapsed * 0.6));
+
+    void safeDt;
   }
 
-  syncFog();
-
-  return {
-    group,
-    water,
-    update(dt) {
-      waterUniforms.uTime.value += dt;
-      syncFog();
-    },
-  };
+  return { update };
 }
