@@ -66,6 +66,8 @@ const BEACON_BLUE = new THREE.MeshStandardMaterial({
   emissiveIntensity: 2.2,
   roughness: 0.35,
 });
+/** Near-white paint for the cruiser's doors and roof: black-and-white livery. */
+const WHITE_PAINT = new THREE.MeshStandardMaterial({ color: 0xf2f2ec, roughness: 0.42, metalness: 0.2 });
 
 const UNIT_CUBE = new THREE.BoxGeometry(1, 1, 1);
 
@@ -250,6 +252,12 @@ function makeBody(spec, paint, police) {
   const width = spec.width;
   const height = spec.height;
 
+  // The silhouette is built in three stacked steps instead of one slab, so the
+  // car reads as a car from above as well as from the side: a low hood up
+  // front, a tall beltline under the cabin, a low trunk at the rear. Every
+  // layer is a touch narrower than the one below it, so no two faces are
+  // coplanar and nothing z-fights. All of it stays inside the spec box, so
+  // the collision footprint does not move.
   const shellHeight = Math.max(0.36, height * 0.42);
   const floor = VEHICLE.rideHeight * 1.06;
   // The spec length is the collision box, so the painted shell is inset by the
@@ -258,9 +266,37 @@ function makeBody(spec, paint, police) {
   const bumperDepth = 0.16;
   const shellLength = length - bumperDepth * 2;
 
-  const chassis = panel(paintFor(paint), width, shellHeight, shellLength);
-  chassis.position.y = floor + shellHeight * 0.5;
-  group.add(chassis);
+  // Beltline base: the lowest painted band, full length.
+  const bandHeight = 0.30;
+  const lowerBody = panel(paintFor(paint), width * 0.96, bandHeight, shellLength);
+  lowerBody.position.y = floor + bandHeight * 0.5;
+  group.add(lowerBody);
+
+  // Shoulder: the tall middle band the cabin sits on, inset from the base.
+  const shoulderHeight = shellHeight - bandHeight;
+  const shoulder = panel(paintFor(paint), width * 0.92, shoulderHeight, shellLength * 0.62);
+  shoulder.position.set(0, floor + bandHeight + shoulderHeight * 0.5, length * 0.05);
+  group.add(shoulder);
+
+  // Hood: a low step up front, inset from the base and below the beltline.
+  const hoodLength = shellLength * 0.30;
+  const hood = panel(paintFor(paint), width * 0.94, 0.13, hoodLength);
+  hood.position.set(0, floor + bandHeight + 0.065, -shellLength * 0.5 + hoodLength * 0.5);
+  group.add(hood);
+
+  // Trunk: a low step at the rear, same idea as the hood.
+  const trunkLength = shellLength * 0.20;
+  const trunk = panel(paintFor(paint), width * 0.94, 0.11, trunkLength);
+  trunk.position.set(0, floor + bandHeight + 0.055, shellLength * 0.5 - trunkLength * 0.5);
+  group.add(trunk);
+
+  // Sports lip spoiler on the trunk's rear edge: the player's car is the
+  // sports spec, so this is what the staged cover frame wears.
+  if (spec === CAR_SPECS.sports) {
+    const lip = panel(paintFor(paint), width * 0.86, 0.04, 0.12);
+    lip.position.set(0, floor + bandHeight + 0.13, shellLength * 0.5 - 0.06);
+    group.add(lip);
+  }
 
   const bumperFront = panel(DARK_TRIM, width * 0.94, shellHeight * 0.34, bumperDepth);
   bumperFront.position.set(0, floor + shellHeight * 0.34, -length * 0.5 + bumperDepth * 0.5);
@@ -270,31 +306,71 @@ function makeBody(spec, paint, police) {
   bumperRear.position.set(0, floor + shellHeight * 0.34, length * 0.5 - bumperDepth * 0.5);
   group.add(bumperRear);
 
-  // The light bar lives inside the spec height rather than on top of it: a
-  // cruiser that stood proud of its own collision box would scrape under
-  // bridges and through doorways it fits.
+  // Cabin: dark glass with a painted roof cap that is SHORTER than the cabin,
+  // so glass shows at the front and rear of the roofline from above, and
+  // sloped glass at both ends instead of a flat glass brick.
   const barHeight = police ? 0.12 : 0;
   const cabinHeight = Math.max(0.24, height - (floor + shellHeight) - 0.06 - barHeight);
   const cabinLength = length * 0.44;
-  const cabin = panel(GLASS, width * 0.8, cabinHeight, cabinLength);
-  cabin.position.set(0, floor + shellHeight + cabinHeight * 0.5, length * 0.07);
+  const cabinZ = length * 0.07;
+  const cabin = panel(GLASS, width * 0.76, cabinHeight, cabinLength);
+  cabin.position.set(0, floor + shellHeight + cabinHeight * 0.5, cabinZ);
   group.add(cabin);
 
-  // A painted roof cap over the glass: without it the cabin is a translucent
-  // brick and the car reads as a van from every angle.
-  const roof = panel(paintFor(paint), width * 0.78, 0.07, cabinLength * 0.94);
-  roof.position.set(0, floor + shellHeight + cabinHeight + 0.02, length * 0.07);
+  const roof = panel(police ? WHITE_PAINT : paintFor(paint), width * 0.74, 0.06, cabinLength * 0.68);
+  roof.position.set(0, floor + shellHeight + cabinHeight + 0.01, cabinZ);
   group.add(roof);
 
+  // Sloped windshield and rear glass: the top leans toward the cabin, the
+  // bottom meets the hood and the trunk, so the glasshouse has a rake.
+  const glassHeight = cabinHeight * 1.25;
+  const windshield = panel(GLASS, width * 0.70, glassHeight, 0.05);
+  windshield.rotation.x = 0.38;
+  windshield.position.set(0, floor + shellHeight + cabinHeight * 0.5, cabinZ - cabinLength * 0.42);
+  group.add(windshield);
+
+  const rearGlass = panel(GLASS, width * 0.70, glassHeight, 0.05);
+  rearGlass.rotation.x = -0.38;
+  rearGlass.position.set(0, floor + shellHeight + cabinHeight * 0.5, cabinZ + cabinLength * 0.42);
+  group.add(rearGlass);
+
+  // B-pillars: thin painted strips on the cabin flanks, so the side glass
+  // reads as windows instead of one dark slab. Mirrors ride on short stalks
+  // at the front of the cabin, just proud of the body sides.
+  for (const side of [-1, 1]) {
+    const pillar = panel(paintFor(paint), 0.03, cabinHeight * 0.92, 0.07);
+    pillar.position.set(side * (width * 0.38 + 0.005), floor + shellHeight + cabinHeight * 0.5, cabinZ);
+    group.add(pillar);
+
+    const stalk = panel(DARK_TRIM, 0.10, 0.03, 0.03);
+    stalk.position.set(side * width * 0.40, floor + shellHeight + cabinHeight * 0.32, cabinZ - cabinLength * 0.40);
+    group.add(stalk);
+
+    const mirror = panel(DARK_TRIM, 0.05, 0.10, 0.13);
+    mirror.position.set(side * width * 0.46, floor + shellHeight + cabinHeight * 0.32, cabinZ - cabinLength * 0.40);
+    group.add(mirror);
+  }
+
+  // Dark side skirts between the wheels: they ground the body and make the
+  // wheel gaps read as arches instead of a floating slab.
+  for (const side of [-1, 1]) {
+    const skirt = panel(DARK_TRIM, 0.04, 0.10, length * 0.30);
+    skirt.position.set(side * width * 0.48, floor + 0.05, 0);
+    group.add(skirt);
+  }
+
   // --- wheels -----------------------------------------------------------------
+  // The old mesh tucked the tyres inside the body sides, so from the rear
+  // three-quarter view that every staged shot uses, the car had no visible
+  // wheels at all. The tyres now stand just proud of the lower body — still
+  // inside the spec width, so the collision box is untouched — and the rims
+  // are bigger and brighter, so a wheel reads as a wheel even on dark asphalt.
   const wheels = [];
   const wheelRadius = VEHICLE.rideHeight;
   const wheelWidth = Math.min(0.26, width * 0.13);
   const tyreGeometry = new THREE.CylinderGeometry(wheelRadius, wheelRadius, wheelWidth, 12);
-  const rimGeometry = new THREE.CylinderGeometry(wheelRadius * 0.55, wheelRadius * 0.55, wheelWidth * 1.02, 8);
-  // Tucked inside the collision width: a car 12 cm wider than its own spec
-  // would clip the kerb its physics says it cleared.
-  const track = width * 0.5 - wheelWidth * 0.5 - 0.02;
+  const rimGeometry = new THREE.CylinderGeometry(wheelRadius * 0.62, wheelRadius * 0.62, wheelWidth * 1.08, 8);
+  const track = width * 0.5 - wheelWidth * 0.5 - 0.005;
 
   for (let i = 0; i < 4; i++) {
     const side = i % 2 === 0 ? -1 : 1;
@@ -319,19 +395,36 @@ function makeBody(spec, paint, police) {
   }
 
   // --- lights -----------------------------------------------------------------
-  const lampZ = -length * 0.5 + 0.03;
+  // Headlights sit on the hood's nose, a dark grille between them on the
+  // bumper face, and the rear gets one full-width red bar across the trunk
+  // face instead of two small blocks, so the tail reads at a glance from
+  // behind — which is where the staged camera always sits.
   for (const side of [-1, 1]) {
-    const head = panel(LAMP_FRONT, width * 0.24, 0.13, 0.08);
-    head.position.set(side * width * 0.3, floor + shellHeight * 0.66, lampZ);
+    const head = panel(LAMP_FRONT, width * 0.26, 0.13, 0.08);
+    head.position.set(side * width * 0.3, floor + bandHeight + 0.065, -shellLength * 0.5 - 0.03);
     group.add(head);
-
-    const tail = panel(LAMP_REAR, width * 0.22, 0.12, 0.07);
-    tail.position.set(side * width * 0.3, floor + shellHeight * 0.7, -lampZ);
-    group.add(tail);
   }
+
+  const grille = panel(DARK_TRIM, width * 0.36, 0.08, 0.06);
+  grille.position.set(0, floor + shellHeight * 0.34, -length * 0.5 - 0.01);
+  group.add(grille);
+
+  const tailBar = panel(LAMP_REAR, width * 0.80, 0.09, 0.06);
+  tailBar.position.set(0, floor + bandHeight + 0.055, shellLength * 0.5 + 0.03);
+  group.add(tailBar);
 
   // --- police livery ------------------------------------------------------------
   if (police) {
+    // Black-and-white livery: white doors over the black body (the roof is
+    // already white), so a cruiser reads as a cruiser even with its light
+    // bar out of frame. The panels sit a hair proud of the skirt and the
+    // body side, so no face is coplanar with anything behind it.
+    for (const side of [-1, 1]) {
+      const door = panel(WHITE_PAINT, 0.03, 0.26, length * 0.30);
+      door.position.set(side * (width * 0.48 + 0.015), floor + 0.18, length * 0.02);
+      group.add(door);
+    }
+
     // Anchored to the top of the spec rather than to the roof, so the light bar
     // fills the last 12 cm of the silhouette instead of adding to it.
     const barBase = height - barHeight;
