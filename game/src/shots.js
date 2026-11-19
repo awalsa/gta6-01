@@ -317,6 +317,41 @@ function stagePursuit(game, px, pz, yaw, flavour) {
   }
 }
 
+/**
+ * Push every pedestrian inside an 8 m bubble around the subject out to
+ * 9–13 m, so nobody stands between the lens and the subject or on top
+ * of her car. Directions stay radial (a pedestrian keeps its side of
+ * the street); a direction that lands inside a wall tries the other
+ * three quarters before giving up and leaving that pedestrian put.
+ */
+function clearSubjectBubble(game, px, pz) {
+  const peds = game && game.peds;
+  if (!peds || !Array.isArray(peds.people)) return;
+  const BUBBLE = 8;
+  for (let i = 0; i < peds.people.length; i++) {
+    const ped = peds.people[i];
+    if (!ped || !ped.mesh || !ped.mesh.position) continue;
+    const dx = ped.x - px;
+    const dz = ped.z - pz;
+    const dist = Math.hypot(dx, dz);
+    if (dist >= BUBBLE) continue;
+    // Golden-angle spread for a pedestrian standing exactly on the
+    // subject, where the radial direction is undefined.
+    const angle = dist < 0.01 ? i * 2.399963 : Math.atan2(dx, dz);
+    const reach = 9 + (i % 5);
+    for (let turn = 0; turn < 4; turn++) {
+      const a = angle + turn * (Math.PI / 2);
+      const x = px + Math.sin(a) * reach;
+      const z = pz + Math.cos(a) * reach;
+      if (insideBuilding(game, x, z, 0.6)) continue;
+      ped.x = x;
+      ped.z = z;
+      ped.mesh.position.set(x, groundAt(game, x, z), z);
+      break;
+    }
+  }
+}
+
 // ------------------------------------------------------------ the stager
 
 /**
@@ -426,6 +461,13 @@ export function stageShot(nameOrGame, gameOrName) {
   } else {
     callIf(game && game.crowd, 'relocate', { x: px, z: pz });
   }
+
+  // The crowd stages around the subject, and the lens sits only a few
+  // metres behind her — the nearest pedestrians end up between the lens
+  // and the subject and read as a wall. Push everyone inside an 8 m
+  // bubble around her out to the pavement beyond it, keeping them on
+  // the ground and out of the walls, so the subject and the street read.
+  clearSubjectBubble(game, px, pz);
 
   // Driving shots get ambient traffic; chase shots get the pursuit on top of it.
   if (entry.inVehicle) stageTraffic(game, px, pz, yaw);
